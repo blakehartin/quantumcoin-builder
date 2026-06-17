@@ -47,6 +47,11 @@
 .qce-rows .row.err { background: var(--error-row-bg); box-shadow: inset 2px 0 0 var(--error); }
 .qce-rows .row.warn { background: var(--warning-row-bg); box-shadow: inset 2px 0 0 var(--warning); }
 
+.qce-markers { z-index: 1; padding: 0; pointer-events: none; }
+.qce-markers .mk { position: absolute; box-sizing: border-box; }
+.qce-markers .mk.err { border-bottom: 2px solid var(--error); }
+.qce-markers .mk.warn { border-bottom: 2px solid var(--warning); }
+
 .qce-highlight { z-index: 1; color: var(--syntax-identifier); pointer-events: none; }
 .qce-input {
   position: absolute; inset: 0; z-index: 2; box-sizing: border-box;
