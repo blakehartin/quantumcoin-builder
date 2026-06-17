@@ -1,6 +1,6 @@
 # QuantumCoin Builder
 
-A browser-based **smart contracts development platform** for QuantumCoin.
+A browser-based **smart contracts development platform** for [QuantumCoin](https://quantumcoin.org).
 Write Solidity, compile it in-browser with the pinned QuantumCoin `soljson` compiler,
 inspect the **SDK-validated ABI** via `quantumcoin`, and **download creation + runtime
 bytecode** — with **no deploy, wallet, or network flows**.
