@@ -1,0 +1,72 @@
+/*
+ * QCEditor styling (Mini §5, §9.1 editor tokens). Uses theme tokens only.
+ * Layered surface: gutter | (highlight backdrop + transparent textarea) with
+ * diagnostic row overlays beneath the text.
+ */
+
+.editor-area { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg-editor); }
+
+.tabs { display: flex; background: var(--tab-inactive-bg); border-bottom: 1px solid var(--border); overflow-x: auto; }
+.tab {
+  display: flex; align-items: center; gap: 8px; padding: 0 14px; height: 32px; font-size: 12.5px;
+  color: var(--text-muted); border-right: 1px solid var(--border); cursor: pointer; white-space: nowrap;
+}
+.tab.active { background: var(--tab-active-bg); color: var(--text-primary); border-top: 2px solid var(--accent); }
+.tab .close { color: var(--text-muted); border-radius: 3px; padding: 0 3px; }
+.tab .close:hover { background: var(--menu-hover-bg); color: var(--text-primary); }
+
+.pragma-banner {
+  display: none; align-items: center; gap: 8px; padding: 6px 14px; font-size: 12px;
+  background: var(--warning-row-bg); color: var(--warning); border-bottom: 1px solid var(--border);
+}
+.pragma-banner.show { display: flex; }
+
+.qceditor {
+  flex: 1; display: flex; position: relative; overflow: hidden;
+  font-family: var(--font-mono); font-size: 13px; line-height: var(--editor-line-h);
+}
+
+.qce-gutter {
+  user-select: none; text-align: right; color: var(--gutter-fg); background: var(--bg-editor);
+  padding: 8px 8px 8px 12px; overflow: hidden; flex: 0 0 auto; min-width: 48px;
+}
+.qce-gutter .ln { height: var(--editor-line-h); position: relative; padding-right: 6px; }
+.qce-gutter .ln.active { color: var(--gutter-fg-active); }
+.qce-gutter .ln .mark { position: absolute; left: 0; }
+.qce-gutter .ln.err .mark { color: var(--error); }
+.qce-gutter .ln.warn .mark { color: var(--warning); }
+
+.qce-gutter-inner { will-change: transform; }
+.qce-wrap { position: relative; flex: 1; overflow: hidden; }
+.qce-layer { position: absolute; top: 0; left: 0; padding: 8px 14px; margin: 0; border: 0;
+  white-space: pre; word-wrap: normal; font: inherit; line-height: var(--editor-line-h); will-change: transform; }
+
+.qce-rows { z-index: 0; padding: 8px 0 0 0; pointer-events: none; }
+.qce-rows .row { width: 100%; }
+.qce-rows .row.active { background: var(--bg-editor-active-line); }
+.qce-rows .row.err { background: var(--error-row-bg); box-shadow: inset 2px 0 0 var(--error); }
+.qce-rows .row.warn { background: var(--warning-row-bg); box-shadow: inset 2px 0 0 var(--warning); }
+
+.qce-highlight { z-index: 1; color: var(--syntax-identifier); pointer-events: none; }
+.qce-input {
+  position: absolute; inset: 0; z-index: 2; box-sizing: border-box;
+  color: transparent; background: transparent; caret-color: var(--text-primary);
+  resize: none; outline: none; overflow: auto; white-space: pre; padding: 8px 14px;
+  font: inherit; line-height: var(--editor-line-h); border: 0; margin: 0; tab-size: 4;
+}
+.qce-input::selection { background: var(--editor-selection); }
+.qce-input:focus { outline: none; }
+
+/* token classes */
+.tok-comment { color: var(--syntax-comment); font-style: italic; }
+.tok-string { color: var(--syntax-string); }
+.tok-number { color: var(--syntax-number); }
+.tok-keyword { color: var(--syntax-keyword); }
+.tok-type { color: var(--syntax-type); }
+.tok-builtin { color: var(--syntax-builtin); }
+.tok-operator { color: var(--syntax-operator); }
+.tok-identifier { color: var(--syntax-identifier); }
+
+.sq-error { text-decoration: wavy underline var(--error); text-decoration-skip-ink: none; }
+.sq-warning { text-decoration: wavy underline var(--warning); text-decoration-skip-ink: none; }
+.sq-addr { text-decoration: wavy underline var(--warning); text-decoration-skip-ink: none; }
