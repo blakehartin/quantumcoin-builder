@@ -14,6 +14,7 @@ import { Explorer } from "./files/explorer";
 import { Tabs } from "./files/tabs";
 import { initSdk } from "./abi/sdk";
 import { readZip } from "./export/zip";
+import { downloadProjectZip } from "./export/download";
 
 const store = new Store();
 const workspace = new Workspace();
@@ -28,9 +29,28 @@ const shellReady = new Promise<void>((r) => {
   resolveShellReady = r;
 });
 
+// ---- Auto-compile (3s after the last edit) ----
+const AUTO_COMPILE_DELAY = 3000;
+let autoCompileTimer: number | null = null;
+let autoCompileEnabled = false;
+
+function scheduleAutoCompile(): void {
+  if (!autoCompileEnabled) return;
+  if (autoCompileTimer != null) clearTimeout(autoCompileTimer);
+  autoCompileTimer = window.setTimeout(() => {
+    autoCompileTimer = null;
+    // Skip silently while the pragma is unsatisfied to avoid noisy errors mid-edit.
+    if (!editor.getPragmaStatus().ok) return;
+    void compileCurrent();
+  }, AUTO_COMPILE_DELAY);
+}
+
 // ---- Editor ----
 const editor = new QCEditor({
-  onChange: (path, value) => workspace.write(path, value),
+  onChange: (path, value) => {
+    workspace.write(path, value);
+    scheduleAutoCompile();
+  },
   onPragmaChange: (status: PragmaStatus) => {
     store.set({ pragmaOk: status.ok });
     sidePanel.setPragmaOk(status.ok);
@@ -205,6 +225,14 @@ function importFromZip(): void {
   });
 }
 
+function downloadProject(): void {
+  workspace.write(editor.getPath(), editor.getValue());
+  const sources = workspace.allSources();
+  const count = Object.keys(sources).length;
+  const filename = downloadProjectZip(sources);
+  terminal.log(`Downloaded ${count} file(s) as ${filename}`, "success");
+}
+
 function pickFile(accept: string, onPick: (f: File) => void): void {
   const input = document.createElement("input");
   input.type = "file";
@@ -258,6 +286,7 @@ function handleAction(id: string): void {
     case "file.new": newFile(); break;
     case "file.open": importFromFile(); break;
     case "file.importZip": importFromZip(); break;
+    case "file.download": downloadProject(); break;
     case "file.save":
       workspace.write(editor.getPath(), editor.getValue());
       terminal.log(`Saved ${editor.getPath()}`);
@@ -278,12 +307,12 @@ function handleAction(id: string): void {
     case "tools.compilerSettings":
       terminal.log("Compiler settings: optimizer enabled (runs 200); Solidity 0.7.6 fixed. (UI in a later iteration.)");
       break;
-    case "help.docs": window.open("https://github.com/quantumcoinproject", "_blank", "noopener"); break;
+    case "help.docs": window.open("https://quantumcoin.org", "_blank", "noopener"); break;
     case "help.shortcuts":
       terminal.log("Shortcuts: Ctrl+S Save, Ctrl+Shift+B Compile, Ctrl+F Find, Ctrl+H Replace, Ctrl+G Go to line");
       break;
     case "help.about":
-      terminal.log("QuantumCoin Platform Builder \u2014 Solidity 0.7.6 editor + compiler. No deploy/wallet.");
+      terminal.log("QuantumCoin Blockchain Platform Builder");
       break;
     default: break;
   }
@@ -344,8 +373,9 @@ function startBootstrap(): void {
     const app = document.getElementById("app") as HTMLElement;
     app.hidden = false;
     bindGlobalShortcuts();
+    autoCompileEnabled = true;
     editor.focus();
-    terminal.log("Ready. Write Solidity 0.7.6, then Build \u2192 Compile (Ctrl+Shift+B).");
+    terminal.log("Ready. Write Solidity 0.7.6 \u2014 it auto-compiles ~3s after you stop typing (or Ctrl+Shift+B).");
   });
 }
 

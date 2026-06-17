@@ -57,6 +57,18 @@ export function downloadArtifactsZip(
   return filename;
 }
 
+/** Bundle every project source file into a single ZIP for download (Mini §8). */
+export function downloadProjectZip(
+  files: Record<string, string>,
+  filename = "quantumcoin-project.zip",
+): string {
+  const entries: ZipEntry[] = Object.entries(files).map(([name, content]) =>
+    textEntry(name, content),
+  );
+  triggerDownload(filename, createZip(entries));
+  return filename;
+}
+
 export async function copyToClipboard(text: string): Promise<void> {
   if (navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(text);

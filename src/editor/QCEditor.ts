@@ -2,6 +2,7 @@ import { Document } from "./Document";
 import { HighlightLayer } from "./HighlightLayer";
 import { Gutter, type GutterMark } from "./Gutter";
 import { DiagnosticLayer } from "./DiagnosticLayer";
+import { MarkerLayer } from "./MarkerLayer";
 import type { EditorDiagnostic } from "../compiler/types";
 
 export interface PragmaStatus {
@@ -18,22 +19,50 @@ export interface QCEditorOptions {
 
 const PRAGMA_RE = /pragma\s+solidity\s+([^;]+);/;
 
+const MAX_VERSION: readonly [number, number, number] = [0, 7, 6];
+
+function parseVer(s: string): [number, number, number] {
+  const p = s.split(".").map((n) => parseInt(n, 10) || 0);
+  return [p[0] ?? 0, p[1] ?? 0, p[2] ?? 0];
+}
+
+function cmpVer(a: readonly number[], b: readonly number[]): number {
+  for (let i = 0; i < 3; i++) {
+    const d = (a[i] ?? 0) - (b[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
 /**
- * Best-effort check that a pragma version constraint is satisfiable by the only
- * supported compiler, Solidity 0.7.6 (the QuantumCoin "7.6" build). The compiler
- * itself remains the source of truth; this just gives a friendly pre-compile hint.
+ * Best-effort check that a pragma version constraint can be satisfied by a
+ * Solidity version up to and including 0.7.6 (the highest the QuantumCoin
+ * "7.6" build supports). Returns false only when the constraint *requires* a
+ * version above 0.7.6 (e.g. `0.8.0`, `^0.8.0`, `>=0.8.0`, `0.7.7`, `>0.7.6`).
+ * The compiler itself remains the source of truth; this is a friendly pre-hint.
  */
 export function pragmaAllows076(raw: string): boolean {
-  const v = raw.replace(/\s+/g, " ").trim();
-  // Range form: >=0.7.0 <0.8.0 (and similar) — accept if it brackets 0.7.x.
-  if (/>=?\s*0\.7(\.\d+)?/.test(v) && /<\s*0\.8(\.0)?/.test(v)) return true;
-  const m = v.match(/^([\^~]?)0\.7(?:\.(\d+))?$/);
-  if (!m) return false;
-  const op = m[1];
-  const patch = m[2] === undefined ? undefined : Number(m[2]);
-  if (patch === undefined) return true; // "0.7" / "^0.7" / "~0.7" -> includes 0.7.6
-  if (op === "^" || op === "~") return patch <= 6; // [0.7.patch, 0.8.0) contains 0.7.6
-  return patch === 6; // exact pin
+  const TOKEN_RE = /([\^~]|>=|<=|>|<|=)?\s*(\d+(?:\.\d+){0,2})/g;
+  const clauses = raw.split("||");
+  return clauses.some((clause) => {
+    const tokens = [...clause.matchAll(TOKEN_RE)];
+    if (tokens.length === 0) return false;
+    // A clause is satisfiable by <=0.7.6 unless any comparator forces a higher version.
+    return tokens.every((t) => {
+      const op = t[1] ?? "";
+      const ver = parseVer(t[2]!);
+      const c = cmpVer(ver, MAX_VERSION);
+      switch (op) {
+        case "<":
+        case "<=":
+          return true; // upper bounds never force a newer compiler
+        case ">":
+          return c < 0; // >0.7.6 (and >0.7.7, ...) require something newer
+        default: // "", "=", "^", "~", ">="
+          return c <= 0; // lower bound / exact must be at or below 0.7.6
+      }
+    });
+  });
 }
 const LINE_H = 20; // matches --editor-line-h
 
@@ -55,6 +84,7 @@ export class QCEditor {
   private highlight = new HighlightLayer();
   private gutter = new Gutter();
   private rows = new DiagnosticLayer(LINE_H);
+  private markers = new MarkerLayer(LINE_H);
 
   private diagnostics: EditorDiagnostic[] = [];
   private retokenizeTimer: number | null = null;
@@ -92,6 +122,7 @@ export class QCEditor {
 
     this.wrap.appendChild(this.rows.el);
     this.wrap.appendChild(this.highlight.el);
+    this.wrap.appendChild(this.markers.el);
     this.wrap.appendChild(this.textarea);
 
     editor.appendChild(this.gutter.el);
@@ -199,6 +230,12 @@ export class QCEditor {
     this.gutterRender();
   }
 
+  private renderMarkers(): void {
+    const markers = MarkerLayer.fromDiagnostics(this.diagnostics, this.doc.getValue());
+    this.markers.render(markers);
+    this.markers.el.style.width = `${Math.max(this.textarea.scrollWidth, this.wrap.clientWidth)}px`;
+  }
+
   gotoLine(line: number, flash = false): void {
     const offset = this.doc.lineStartOffset(line);
     this.textarea.focus();
@@ -228,14 +265,14 @@ export class QCEditor {
   getPragmaStatus(): PragmaStatus {
     const m = this.doc.getValue().match(PRAGMA_RE);
     if (!m) {
-      return { ok: false, found: null, message: "Missing `pragma solidity 0.7.6;`" };
+      return { ok: false, found: null, message: "Missing `pragma solidity` (use a version up to 0.7.6, e.g. `^0.7.0`)" };
     }
     const version = m[1]!.trim();
     if (!pragmaAllows076(version)) {
       return {
         ok: false,
         found: version,
-        message: `Solidity \`${version}\` is not supported — this builder compiles 0.7.6 only`,
+        message: `Solidity \`${version}\` targets a newer compiler — this builder supports up to 0.7.6`,
       };
     }
     return { ok: true, found: version, message: "" };
@@ -248,7 +285,7 @@ export class QCEditor {
       this.banner.textContent = "";
     } else {
       this.banner.classList.add("show");
-      this.banner.innerHTML = `\u26A0 ${escapeHtml(status.message)}. Compile is blocked until the source uses <span class="mono">pragma solidity 0.7.6;</span>`;
+      this.banner.innerHTML = `\u26A0 ${escapeHtml(status.message)}. Compile is blocked until the source targets <span class="mono">Solidity 0.7.6 or below</span>`;
     }
     this.opts.onPragmaChange?.(status);
   }
@@ -287,6 +324,7 @@ export class QCEditor {
     this.rows.render(this.doc.lineCount, this.activeLine(), severities);
     const width = Math.max(this.textarea.scrollWidth, this.wrap.clientWidth);
     this.rows.el.style.width = `${width}px`;
+    this.renderMarkers();
     this.syncScroll();
   }
 
@@ -305,6 +343,7 @@ export class QCEditor {
     const { scrollLeft, scrollTop } = this.textarea;
     this.highlight.setTransform(scrollLeft, scrollTop);
     this.rows.setTransform(scrollLeft, scrollTop);
+    this.markers.setTransform(scrollLeft, scrollTop);
     this.gutter.setScrollTop(scrollTop);
   }
 

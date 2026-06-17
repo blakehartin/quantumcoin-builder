@@ -18,7 +18,8 @@ export const MENUS: MenuDef[] = [
     items: [
       { id: "file.new", label: "New File", shortcut: "Ctrl+N" },
       { id: "file.open", label: "Open File\u2026", shortcut: "Ctrl+O" },
-      { id: "file.importZip", label: "Import from Zip\u2026", separatorAfter: true },
+      { id: "file.importZip", label: "Import from Zip\u2026" },
+      { id: "file.download", label: "Download Project (.zip)", separatorAfter: true },
       { id: "file.save", label: "Save", shortcut: "Ctrl+S" },
       { id: "file.rename", label: "Rename\u2026" },
       { id: "file.close", label: "Close File", separatorAfter: true },
@@ -89,6 +90,13 @@ export class MenuBar {
         const open = wrap.classList.contains("open");
         this.closeAll();
         if (!open) wrap.classList.add("open");
+      });
+      // When a menu is already open, hovering another label switches to it.
+      label.addEventListener("mouseenter", () => {
+        if (wrap.classList.contains("open")) return;
+        if (!this.el.querySelector(".menu.open")) return;
+        this.closeAll();
+        wrap.classList.add("open");
       });
       const dropdown = document.createElement("div");
       dropdown.className = "dropdown";
