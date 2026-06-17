@@ -12,10 +12,11 @@ export default defineConfig({
     trace: "on-first-retry",
   },
   webServer: {
-    command: "npm run build:fast && npm run preview -- --port 4173",
+    command: "npm run vendor:compiler && npm run build:fast && npm run preview -- --port 4173",
     url: "http://localhost:4173",
     reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
+    // Allow extra headroom: the first run downloads the ~24 MB soljson compiler.
+    timeout: 240_000,
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
 });

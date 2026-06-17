@@ -7,8 +7,14 @@ import { test, expect } from "@playwright/test";
  * (e.g. the fast CI build), this spec skips itself rather than failing.
  */
 test("compiles the sample contract and exposes artifacts", async ({ page, baseURL }) => {
+  // NOTE: `vite preview` serves index.html (HTTP 200, text/html) as an SPA
+  // fallback for unknown paths, so `probe.ok()` alone is not enough to tell
+  // whether the compiler was actually vendored. Confirm the response is really
+  // the JS asset before running the (otherwise failing) compile flow.
   const probe = await page.request.get(`${baseURL}/assets/compilers/soljson-v32b.8.12.js`);
-  test.skip(!probe.ok(), "soljson compiler not vendored — run `npm run vendor:compiler`");
+  const contentType = probe.headers()["content-type"] ?? "";
+  const vendored = probe.ok() && /javascript|ecmascript/i.test(contentType);
+  test.skip(!vendored, "soljson compiler not vendored — run `npm run vendor:compiler`");
 
   await page.goto("/");
   await expect(page.locator('[data-testid="ide-root"]')).toBeVisible({ timeout: 30_000 });
