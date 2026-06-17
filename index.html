@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="quantum-dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      Self-contained CSP (Mini §13.1). 'wasm-unsafe-eval' is required for the
+      Emscripten-compiled soljson compiler running inside the Web Worker.
+      No third-party origins are permitted for any application asset.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; img-src 'self' data: blob:; font-src 'self'; connect-src 'self';"
+    />
+    <link rel="icon" type="image/png" href="/assets/icons/quantum-coin-icon.png" />
+    <title>QuantumCoin — Platform Builder</title>
+  </head>
+  <body>
+    <div id="app" data-testid="ide-root" hidden></div>
+    <div id="bootstrap-root"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

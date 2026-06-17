@@ -1,0 +1,57 @@
+/*
+ * QuantumCoin Platform Builder — Quantum Dark theme tokens (app copy).
+ * Mirrors docs/ui-themes/tokens-quantum-dark.css (the visual source of truth).
+ */
+
+:root,
+[data-theme="quantum-dark"] {
+  --bg-app: #0b0f1a;
+  --bg-panel: #121826;
+  --bg-panel-raised: #18203033;
+  --bg-editor: #0e1320;
+  --bg-terminal: #080b12;
+  --border: #1e293b;
+  --border-strong: #283447;
+
+  --text-primary: #e2e8f0;
+  --text-muted: #64748b;
+  --text-inverse: #0b0f1a;
+
+  --accent: #22d3ee;
+  --accent-secondary: #818cf8;
+  --accent-hover: #67e8f9;
+
+  --success: #34d399;
+  --warning: #fbbf24;
+  --error: #f87171;
+
+  --bg-editor-active-line: rgba(255, 255, 255, 0.035);
+  --error-row-bg: rgba(248, 113, 113, 0.14);
+  --warning-row-bg: rgba(251, 191, 36, 0.12);
+  --gutter-fg: #475569;
+  --gutter-fg-active: #94a3b8;
+  --editor-selection: rgba(34, 211, 238, 0.2);
+
+  --syntax-comment: #5b6b86;
+  --syntax-string: #34d399;
+  --syntax-number: #fbbf24;
+  --syntax-keyword: #c084fc;
+  --syntax-type: #38bdf8;
+  --syntax-builtin: #818cf8;
+  --syntax-operator: #94a3b8;
+  --syntax-identifier: #e2e8f0;
+
+  --menu-hover-bg: #1b2436;
+  --tab-active-bg: var(--bg-editor);
+  --tab-inactive-bg: #0f1726;
+  --scrollbar-thumb: #263247;
+
+  --font-ui: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "IBM Plex Mono", "Cascadia Mono", "Consolas", ui-monospace, monospace;
+
+  --radius: 6px;
+  --radius-sm: 4px;
+  --titlebar-h: 38px;
+  --menubar-h: 28px;
+  --editor-line-h: 20px;
+}

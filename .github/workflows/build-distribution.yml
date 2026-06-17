@@ -1,0 +1,56 @@
+name: Build and Distribute
+
+on:
+  push:
+    tags:
+    - '*'   
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run verify:allowed-deps
+      - run: npm run typecheck
+      - run: npm run test
+      - run: npx playwright install --with-deps chromium
+        if: github.event_name != 'pull_request' || github.base_ref == 'main'
+      - run: npm run test:e2e
+        if: github.event_name != 'pull_request' || github.base_ref == 'main'
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run build
+      - run: npm run verify:self-contained
+      - uses: actions/upload-artifact@v4
+        with:
+          name: platform-builder-dist
+          path: dist/
+          retention-days: 30
+
+  release:
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: platform-builder-dist
+          path: dist/
+      - run: cd dist && zip -r ../platform-builder-${{ github.event.release.tag_name }}.zip .
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: platform-builder-${{ github.event.release.tag_name }}.zip

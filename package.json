@@ -1,0 +1,34 @@
+{
+  "name": "quantumcoin-builder",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browser-based smart contracts development platform for QuantumCoin",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "npm run vendor:icon && npm run vendor:compiler && tsc --noEmit && vite build",
+    "build:fast": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "vendor:compiler": "node scripts/vendor-compiler.js",
+    "vendor:icon": "node scripts/vendor-icon.js",
+    "verify:allowed-deps": "node scripts/verify-allowed-deps.js",
+    "verify:self-contained": "node scripts/verify-self-contained.js"
+  },
+  "dependencies": {
+    "quantumcoin": "^7.0.14",
+    "quantum-coin-js-sdk": "^1.0.36"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "typescript": "^5.7.2",
+    "vite": "^8.0.16",
+    "vitest": "^4.1.9"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  }
+}
