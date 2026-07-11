@@ -123,6 +123,16 @@ export class RunPanel {
     this.renderDeploySection();
   }
 
+  /** Clear deployed instances and compiled result (e.g. on workspace switch). */
+  reset(): void {
+    this.instances = [];
+    this.pending.clear();
+    this.result = null;
+    this.selected = null;
+    this.renderInstances();
+    this.renderDeploySection();
+  }
+
   private deployableContracts(): CompiledContract[] {
     return this.result?.contracts.filter((c) => c.bytecode) ?? [];
   }

@@ -5,7 +5,8 @@ import { CompilerClient } from "./compiler/compilerClient";
 import { DEFAULT_SETTINGS, type EditorDiagnostic } from "./compiler/types";
 import { SidePanel } from "./panels/sidePanel";
 import { Terminal } from "./app/terminal";
-import { MenuBar } from "./app/menu";
+import { MenuBar, MENUS, type MenuDef, type MenuItem } from "./app/menu";
+import { promptText, newWorkspaceDialog, confirmDialog, alertDialog } from "./app/dialogs";
 import { BootstrapOverlay } from "./app/bootstrap";
 import { brandIcon } from "./app/brand";
 import { Store } from "./app/state";
@@ -84,10 +85,22 @@ const tabs = new Tabs({
 });
 const explorer = new Explorer(workspace, {
   onOpen: (path) => openFile(path),
-  onNew: () => newFile(),
-  onRename: (path) => renameFile(path),
-  onDelete: (path) => deleteFile(path),
+  onNewFile: (dir) => void newFile(dir),
+  onNewFolder: (dir) => void newFolder(dir),
+  onRename: (path) => void renameFile(path),
+  onDelete: (path) => void deleteFile(path),
+  onDuplicate: (path) => duplicateFile(path),
+  onRenameFolder: (path) => void renameFolder(path),
+  onDeleteFolder: (path) => void deleteFolder(path),
+  onSwitchWorkspace: (id) => switchWorkspace(id),
+  onNewWorkspace: () => void createWorkspace(),
+  onRenameWorkspace: (id) => void renameWorkspace(id),
+  onDeleteWorkspace: (id) => void deleteWorkspace(id),
+  onCloneWorkspace: (id) => void cloneWorkspace(id),
 });
+
+// Module-scoped so workspace/recent changes can rebuild dynamic submenus.
+let menubar: MenuBar;
 
 // ---- Shell DOM ----
 function buildShell(): void {
@@ -109,8 +122,9 @@ function buildShell(): void {
   gear.addEventListener("click", () => handleAction("tools.compilerSettings"));
   titlebar.append(brand, spacer, gear);
 
-  // Menu bar
-  const menubar = new MenuBar(handleAction);
+  // Menu bar (dynamic: Open Workspace and Recent submenus rebuild on demand)
+  menubar = new MenuBar(handleAction, buildMenus);
+  workspace.subscribe(() => menubar.refresh());
 
   // Body
   const body = document.createElement("div");
@@ -146,6 +160,42 @@ function spanText(cls: string, text: string): HTMLSpanElement {
   return s;
 }
 
+// Build menu definitions, injecting dynamic Open Workspace / Recent submenus.
+function buildMenus(): MenuDef[] {
+  const activeId = workspace.activeWorkspaceId();
+  const wsItems: MenuItem[] = workspace.listWorkspaces().map((w) => ({
+    id: `file.openWorkspace.${w.id}`,
+    label: (w.id === activeId ? "\u25CF " : "\u2003") + w.name,
+  }));
+
+  const recentFileItems: MenuItem[] = workspace.recentFiles().map((f, i) => ({
+    id: `file.recentFile.${i}`,
+    label: `${f.path}  \u2014  ${f.wsName}`,
+  }));
+  const recentWsItems: MenuItem[] = workspace.recentWorkspaces().map((w, i) => ({
+    id: `file.recentWs.${i}`,
+    label: `\uD83D\uDCC1 ${w.name}`,
+  }));
+  const recentChildren: MenuItem[] = [];
+  recentChildren.push(...recentFileItems);
+  if (recentFileItems.length && recentWsItems.length) {
+    if (recentChildren.length) recentChildren[recentChildren.length - 1]!.separatorAfter = true;
+  }
+  recentChildren.push(...recentWsItems);
+
+  return MENUS.map((menu) => {
+    if (menu.label !== "File") return menu;
+    return {
+      ...menu,
+      items: menu.items.map((item) => {
+        if (item.id === "file.openWorkspace") return { ...item, children: wsItems };
+        if (item.id === "file.recent") return { ...item, children: recentChildren };
+        return item;
+      }),
+    };
+  });
+}
+
 // ---- File operations ----
 function renderTabs(): void {
   openFiles = openFiles.filter((p) => workspace.has(p));
@@ -174,15 +224,22 @@ function openFile(path: string): void {
 function closeFile(path: string): void {
   openFiles = openFiles.filter((p) => p !== path);
   if (openFiles.length === 0) {
-    const next = workspace.list()[0]!;
-    openFiles = [next];
+    const next = workspace.list()[0];
+    if (next) openFiles = [next];
   }
-  if (workspace.getActive() === path) openFile(openFiles[openFiles.length - 1]!);
+  const target = openFiles[openFiles.length - 1];
+  if (workspace.getActive() === path && target) openFile(target);
   else renderTabs();
 }
 
-function newFile(): void {
-  const name = window.prompt("New file name", "Untitled.sol");
+function dirOf(path: string): string {
+  const i = path.lastIndexOf("/");
+  return i >= 0 ? path.slice(0, i) : "";
+}
+
+async function newFile(dir = ""): Promise<void> {
+  const suggested = dir ? `${dir}/Untitled.sol` : "Untitled.sol";
+  const name = await promptText("New File", "Path", suggested);
   if (!name) return;
   const created = workspace.create(name);
   openFiles.push(created);
@@ -191,8 +248,16 @@ function newFile(): void {
   terminal.log(`Created ${created}`);
 }
 
-function renameFile(path: string): void {
-  const next = window.prompt("Rename file", path);
+async function newFolder(dir = ""): Promise<void> {
+  const suggested = dir ? `${dir}/` : "";
+  const name = await promptText("New Folder", "Path", suggested);
+  if (!name) return;
+  const created = workspace.createFolder(name);
+  if (created) terminal.log(`Created folder ${created}`);
+}
+
+async function renameFile(path: string): Promise<void> {
+  const next = await promptText("Rename File", "Path", path);
   if (!next) return;
   const renamed = workspace.rename(path, next);
   openFiles = openFiles.map((p) => (p === path ? renamed : p));
@@ -201,15 +266,123 @@ function renameFile(path: string): void {
   terminal.log(`Renamed ${path} \u2192 ${renamed}`);
 }
 
-function deleteFile(path: string): void {
-  if (!window.confirm(`Delete ${path}?`)) return;
+function duplicateFile(path: string): void {
+  const copy = workspace.duplicate(path);
+  openFiles.push(copy);
+  editor.setDocument(copy, workspace.read(copy));
+  renderTabs();
+  terminal.log(`Duplicated ${path} \u2192 ${copy}`);
+}
+
+async function deleteFile(path: string): Promise<void> {
+  if (!(await confirmDialog("Delete File", `Delete ${path}?`, "Delete"))) return;
   workspace.delete(path);
   openFiles = openFiles.filter((p) => p !== path);
-  const active = workspace.getActive();
-  if (!openFiles.includes(active)) openFiles.push(active);
-  editor.setDocument(active, workspace.read(active));
-  renderTabs();
+  reloadActiveAfterMutation();
   terminal.log(`Deleted ${path}`, "warning");
+}
+
+async function renameFolder(path: string): Promise<void> {
+  const next = await promptText("Rename Folder", "Path", path);
+  if (!next) return;
+  const renamed = workspace.renameFolder(path, next);
+  // File paths under the folder changed; resync open tabs and the editor.
+  openFiles = openFiles.map((p) => (p === path || p.startsWith(path + "/") ? renamed + p.slice(path.length) : p));
+  openFiles = openFiles.filter((p) => workspace.has(p));
+  reloadActiveAfterMutation();
+  terminal.log(`Renamed folder ${path} \u2192 ${renamed}`);
+}
+
+async function deleteFolder(path: string): Promise<void> {
+  if (!(await confirmDialog("Delete Folder", `Delete folder ${path} and all its contents?`, "Delete"))) return;
+  workspace.deleteFolder(path);
+  openFiles = openFiles.filter((p) => workspace.has(p));
+  reloadActiveAfterMutation();
+  terminal.log(`Deleted folder ${path}`, "warning");
+}
+
+// After a mutation that may have changed the active file, make sure a valid file
+// is loaded into the editor and reflected in the tab strip.
+function reloadActiveAfterMutation(): void {
+  const active = workspace.getActive();
+  if (active && !openFiles.includes(active)) openFiles.push(active);
+  editor.setDocument(active, active ? workspace.read(active) : "");
+  renderTabs();
+}
+
+// ---- Workspace operations ----
+async function createWorkspace(): Promise<void> {
+  const res = await newWorkspaceDialog();
+  if (!res) return;
+  const meta = workspace.createWorkspace(res.name, res.template);
+  onWorkspaceSwitched();
+  terminal.log(`Created workspace "${meta.name}"`, "success");
+}
+
+function switchWorkspace(id: string): void {
+  if (id === workspace.activeWorkspaceId()) return;
+  workspace.write(editor.getPath(), editor.getValue());
+  workspace.openWorkspace(id);
+  onWorkspaceSwitched();
+  terminal.log(`Switched to workspace "${workspace.activeWorkspace().name}"`);
+}
+
+async function renameWorkspace(id: string): Promise<void> {
+  const current = workspace.listWorkspaces().find((w) => w.id === id);
+  const next = await promptText("Rename Workspace", "Name", current?.name ?? "");
+  if (!next) return;
+  workspace.renameWorkspace(id, next);
+  terminal.log(`Renamed workspace to "${next}"`);
+}
+
+async function cloneWorkspace(id: string): Promise<void> {
+  const current = workspace.listWorkspaces().find((w) => w.id === id);
+  const next = await promptText("Clone Workspace", "Name", `${current?.name ?? "workspace"} copy`);
+  if (!next) return;
+  workspace.write(editor.getPath(), editor.getValue());
+  const meta = workspace.cloneWorkspace(id, next);
+  if (meta) {
+    onWorkspaceSwitched();
+    terminal.log(`Cloned workspace to "${meta.name}"`, "success");
+  }
+}
+
+async function deleteWorkspace(id: string): Promise<void> {
+  const current = workspace.listWorkspaces().find((w) => w.id === id);
+  if (!current) return;
+  if (!(await confirmDialog("Delete Workspace", `Delete workspace "${current.name}" and all its files?`, "Delete"))) {
+    return;
+  }
+  const wasActive = id === workspace.activeWorkspaceId();
+  workspace.deleteWorkspace(id);
+  if (wasActive) onWorkspaceSwitched();
+  terminal.log(`Deleted workspace "${current.name}"`, "warning");
+}
+
+// Open a recent file, switching workspaces first if it lives in another one.
+function openRecentFile(idx: number): void {
+  const rec = workspace.recentFiles()[idx];
+  if (!rec) return;
+  if (rec.wsId !== workspace.activeWorkspaceId()) {
+    workspace.write(editor.getPath(), editor.getValue());
+    workspace.openWorkspace(rec.wsId);
+    onWorkspaceSwitched();
+  }
+  if (workspace.has(rec.path)) openFile(rec.path);
+  else terminal.log(`Recent file ${rec.path} no longer exists`, "warning");
+}
+
+// Reload editor/tabs/panels for the newly active workspace and recompile.
+function onWorkspaceSwitched(): void {
+  const active = workspace.getActive();
+  openFiles = active ? [active] : [];
+  editor.setDocument(active, active ? workspace.read(active) : "");
+  lastDiagnostics = [];
+  editor.setDiagnostics([]);
+  renderTabs();
+  explorer.render();
+  sidePanel.resetRun();
+  if (active && editor.getPragmaStatus().ok) void compileCurrent();
 }
 
 function importFromFile(): void {
@@ -303,8 +476,29 @@ function focusDiagnostic(d: EditorDiagnostic): void {
 
 // ---- Menu actions ----
 function handleAction(id: string): void {
+  // Dynamic ids from rebuilt submenus (Open Workspace / Recent).
+  if (id.startsWith("file.openWorkspace.")) {
+    switchWorkspace(id.slice("file.openWorkspace.".length));
+    return;
+  }
+  if (id.startsWith("file.recentFile.")) {
+    const idx = Number(id.slice("file.recentFile.".length));
+    openRecentFile(idx);
+    return;
+  }
+  if (id.startsWith("file.recentWs.")) {
+    const idx = Number(id.slice("file.recentWs.".length));
+    const rec = workspace.recentWorkspaces()[idx];
+    if (rec) switchWorkspace(rec.id);
+    return;
+  }
+
   switch (id) {
-    case "file.new": newFile(); break;
+    case "file.new": void newFile(dirOf(workspace.getActive())); break;
+    case "file.newFolder": void newFolder(dirOf(workspace.getActive())); break;
+    case "file.newWorkspace": void createWorkspace(); break;
+    case "file.openWorkspace": break; // parent submenu; no direct action
+    case "file.recent": break; // parent submenu; no direct action
     case "file.open": importFromFile(); break;
     case "file.importZip": importFromZip(); break;
     case "file.download": downloadProject(); break;
@@ -312,7 +506,7 @@ function handleAction(id: string): void {
       workspace.write(editor.getPath(), editor.getValue());
       terminal.log(`Saved ${editor.getPath()}`);
       break;
-    case "file.rename": renameFile(workspace.getActive()); break;
+    case "file.rename": void renameFile(workspace.getActive()); break;
     case "file.close": closeFile(workspace.getActive()); break;
     case "edit.undo": editor.undo(); break;
     case "edit.redo": editor.redo(); break;
@@ -330,14 +524,28 @@ function handleAction(id: string): void {
       terminal.log("Compiler settings: optimizer enabled (runs 200); Solidity 0.7.6 fixed. (UI in a later iteration.)");
       break;
     case "help.docs": window.open("https://quantumcoin.org", "_blank", "noopener"); break;
+    case "help.explorer": window.open("https://quantumscan.com", "_blank", "noopener"); break;
     case "help.shortcuts":
       terminal.log("Shortcuts: Ctrl+S Save, Ctrl+Shift+B Compile, Ctrl+F Find, Ctrl+H Replace, Ctrl+G Go to line");
       break;
     case "help.about":
-      terminal.log("QuantumCoin Blockchain Platform Builder");
+      void showAbout();
       break;
     default: break;
   }
+}
+
+// About dialog: dismissable OK dialog with a link to quantumcoin.org.
+function showAbout(): Promise<void> {
+  const body = document.createElement("span");
+  const link = document.createElement("a");
+  link.className = "explorer-link";
+  link.href = "https://quantumcoin.org";
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.textContent = "QuantumCoin";
+  body.append("QuantumCoin Builder: for developing decentralized applications on the ", link, " Blockchain.");
+  return alertDialog("About QuantumCoin Builder", body);
 }
 
 function toggleExplorer(): void {

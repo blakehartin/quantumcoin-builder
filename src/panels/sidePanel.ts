@@ -53,6 +53,14 @@ export class SidePanel {
     this.render();
   }
 
+  /** Reset deploy/execute session state (deployed instances, compiled result). */
+  resetRun(): void {
+    this.result = null;
+    this.selected = null;
+    this.runPanel.reset();
+    if (this.tab !== "run") this.render();
+  }
+
   setPragmaOk(ok: boolean): void {
     this.pragmaOk = ok;
     if (this.tab === "compiler") this.render();
