@@ -1,7 +1,7 @@
 // File workspace (Mini §4.1): create/rename/delete .sol files, single workspace,
 // localStorage persistence, import from file/zip is handled in main via File API.
 
-import { STORAGE_SOL } from "../app/sample";
+import { STORAGE_SOL, EXAMPLE_TOKEN_SOL, EXAMPLE_DETAILED_SOL } from "../app/sample";
 
 const LS_KEY = "qcpbm.workspace.v1";
 const LS_ACTIVE = "qcpbm.workspace.active";
@@ -38,7 +38,11 @@ export class Workspace {
       this.files = {};
     }
     if (Object.keys(this.files).length === 0) {
-      this.files = { "Storage.sol": STORAGE_SOL };
+      this.files = {
+        "Storage.sol": STORAGE_SOL,
+        "ExampleToken.sol": EXAMPLE_TOKEN_SOL,
+        "ExampleDetailed.sol": EXAMPLE_DETAILED_SOL,
+      };
     }
     if (!this.active || !(this.active in this.files)) {
       this.active = Object.keys(this.files)[0]!;

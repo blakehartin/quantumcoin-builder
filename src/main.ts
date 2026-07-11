@@ -34,6 +34,11 @@ const AUTO_COMPILE_DELAY = 3000;
 let autoCompileTimer: number | null = null;
 let autoCompileEnabled = false;
 
+// Latest whole-program diagnostics, re-applied when switching to an open file so
+// a non-active file's errors (e.g. it implements an interface changed elsewhere)
+// remain visible as squiggles across tab switches.
+let lastDiagnostics: EditorDiagnostic[] = [];
+
 function scheduleAutoCompile(): void {
   if (!autoCompileEnabled) return;
   if (autoCompileTimer != null) clearTimeout(autoCompileTimer);
@@ -43,6 +48,15 @@ function scheduleAutoCompile(): void {
     if (!editor.getPragmaStatus().ok) return;
     void compileCurrent();
   }, AUTO_COMPILE_DELAY);
+}
+
+// Run a pending debounced compile immediately (e.g. before switching files) so
+// diagnostics reflect the latest edits instead of waiting out the debounce.
+function flushAutoCompile(): void {
+  if (autoCompileTimer == null) return;
+  clearTimeout(autoCompileTimer);
+  autoCompileTimer = null;
+  if (editor.getPragmaStatus().ok) void compileCurrent();
 }
 
 // ---- Editor ----
@@ -143,9 +157,15 @@ function openFile(path: string): void {
   if (!workspace.has(path)) return;
   // Persist current editor buffer before switching.
   workspace.write(editor.getPath(), editor.getValue());
+  const hadPendingCompile = autoCompileTimer != null;
   workspace.setActive(path);
   if (!openFiles.includes(path)) openFiles.push(path);
   editor.setDocument(path, workspace.read(path));
+  // A pending edit (e.g. to an interface) hasn't compiled yet; run it now so the
+  // switched-to file reflects fresh cross-file errors. Otherwise re-apply the
+  // last compile's diagnostics so this file's squiggles persist across switches.
+  if (hadPendingCompile) flushAutoCompile();
+  else editor.setDiagnostics(lastDiagnostics);
   renderTabs();
   explorer.render();
   editor.focus();
@@ -259,6 +279,7 @@ async function compileCurrent(): Promise<void> {
     const result = await compiler.compile(sources, DEFAULT_SETTINGS, (stage) =>
       terminal.log(`  ${stage}\u2026`),
     );
+    lastDiagnostics = result.diagnostics;
     editor.setDiagnostics(result.diagnostics);
     for (const d of result.diagnostics) terminal.logDiagnostic(d);
     store.set({ lastResult: result });
@@ -301,6 +322,7 @@ function handleAction(id: string): void {
     case "view.explorer": toggleExplorer(); break;
     case "view.compiler": sidePanel.showTab("compiler"); break;
     case "view.abi": sidePanel.showTab("abi"); break;
+    case "view.run": sidePanel.showTab("run"); break;
     case "view.terminal": toggleTerminal(); break;
     case "build.compile":
     case "build.compileAll": compileCurrent(); break;
@@ -376,6 +398,8 @@ function startBootstrap(): void {
     autoCompileEnabled = true;
     editor.focus();
     terminal.log("Ready. Write Solidity 0.7.6 \u2014 it auto-compiles ~3s after you stop typing (or Ctrl+Shift+B).");
+    // Check the already-open files immediately (whole-program compile).
+    if (editor.getPragmaStatus().ok) void compileCurrent();
   });
 }
 

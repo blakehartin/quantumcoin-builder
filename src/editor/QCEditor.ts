@@ -80,6 +80,9 @@ export class QCEditor {
   private wrap!: HTMLDivElement;
   private textarea!: HTMLTextAreaElement;
   private banner!: HTMLDivElement;
+  private bannerText!: HTMLSpanElement;
+  // Message the user explicitly dismissed; kept hidden until the pragma problem changes.
+  private dismissedMessage: string | null = null;
 
   private highlight = new HighlightLayer();
   private gutter = new Gutter();
@@ -102,6 +105,17 @@ export class QCEditor {
     // Pragma guard banner (Mini §5.4)
     this.banner = document.createElement("div");
     this.banner.className = "pragma-banner";
+    this.banner.setAttribute("role", "alert");
+    this.bannerText = document.createElement("span");
+    this.bannerText.className = "pragma-banner-text";
+    const bannerClose = document.createElement("button");
+    bannerClose.type = "button";
+    bannerClose.className = "pragma-banner-close";
+    bannerClose.textContent = "\u2715";
+    bannerClose.setAttribute("aria-label", "Dismiss warning");
+    bannerClose.title = "Dismiss";
+    bannerClose.addEventListener("click", () => this.dismissBanner());
+    this.banner.append(this.bannerText, bannerClose);
     this.root.appendChild(this.banner);
 
     const editor = document.createElement("div");
@@ -281,13 +295,23 @@ export class QCEditor {
   private checkPragma(): void {
     const status = this.getPragmaStatus();
     if (status.ok) {
+      this.dismissedMessage = null;
       this.banner.classList.remove("show");
-      this.banner.textContent = "";
+      this.bannerText.textContent = "";
+    } else if (status.message === this.dismissedMessage) {
+      // User dismissed this exact warning; keep it hidden until the problem changes.
+      this.banner.classList.remove("show");
     } else {
+      this.dismissedMessage = null;
       this.banner.classList.add("show");
-      this.banner.innerHTML = `\u26A0 ${escapeHtml(status.message)}. Compile is blocked until the source targets <span class="mono">Solidity 0.7.6 or below</span>`;
+      this.bannerText.innerHTML = `\u26A0 ${escapeHtml(status.message)}. Compile is blocked until the source targets <span class="mono">Solidity 0.7.6 or below</span>`;
     }
     this.opts.onPragmaChange?.(status);
+  }
+
+  private dismissBanner(): void {
+    this.dismissedMessage = this.getPragmaStatus().message;
+    this.banner.classList.remove("show");
   }
 
   // ---- Rendering ----

@@ -20,6 +20,33 @@ const DEFAULT_RPC = "https://public.rpc.quantumcoinapi.com"; // used by Initiali
 let qc: AnyModule | null = null;
 let ready = false;
 let lastError: string | null = null;
+let settled = false;
+const settledListeners = new Set<() => void>();
+
+function notifySettled(): void {
+  settled = true;
+  for (const cb of settledListeners) {
+    try {
+      cb();
+    } catch {
+      /* a listener error must not break others */
+    }
+  }
+  settledListeners.clear();
+}
+
+/**
+ * Run `cb` once `initSdk` has finished (success OR failure). Fires immediately
+ * if the SDK has already settled. Lets UI built before bootstrap completes
+ * (e.g. the Deploy/Execute panel) re-render against the final SDK state.
+ */
+export function onSdkSettled(cb: () => void): void {
+  if (settled) {
+    queueMicrotask(cb);
+    return;
+  }
+  settledListeners.add(cb);
+}
 
 export function isSdkReady(): boolean {
   return ready;
@@ -67,6 +94,7 @@ export async function initSdk(): Promise<void> {
   } catch (err) {
     ready = false;
     lastError = err instanceof Error ? err.message : String(err);
+    notifySettled();
     throw err;
   }
 
@@ -83,6 +111,8 @@ export async function initSdk(): Promise<void> {
     }
   } catch {
     runtimeReady = false;
+  } finally {
+    notifySettled();
   }
 }
 
@@ -110,6 +140,18 @@ export function getAddress(addr: string): string {
   return addr;
 }
 
+/** Decimal coin string -> integer wei string, via the SDK (ethers v6 parseUnits). */
+export function parseUnits(value: string, decimals = 18): string {
+  if (!qc || !ready) throw new Error("QuantumCoin SDK not initialized");
+  return qc.parseUnits(value, decimals).toString();
+}
+
+/** Integer wei string -> decimal coin string, via the SDK (ethers v6 formatUnits). */
+export function formatUnits(value: string, decimals = 18): string {
+  if (!qc || !ready) throw new Error("QuantumCoin SDK not initialized");
+  return qc.formatUnits(value, decimals);
+}
+
 /** keccak256(utf8(text)) via the SDK (pure-JS; no WASM) — used for selectors/topics. */
 export function hashId(text: string): string {
   if (qc && typeof qc.id === "function") return qc.id(text);
@@ -126,4 +168,21 @@ export function encodeFunctionData(
   args: unknown[],
 ): string {
   return iface.encodeFunctionData(name, args);
+}
+
+/** Encode constructor arguments for a deploy (ethers v6 `encodeDeploy`). */
+export function encodeDeploy(iface: AnyModule, args: unknown[]): string {
+  if (typeof iface?.encodeDeploy !== "function") {
+    throw new Error("SDK Interface does not support encodeDeploy");
+  }
+  return iface.encodeDeploy(args);
+}
+
+/** Decode the return data of an `eth_call` for a read function. */
+export function decodeFunctionResult(
+  iface: AnyModule,
+  name: string,
+  data: string,
+): unknown {
+  return iface.decodeFunctionResult(name, data);
 }

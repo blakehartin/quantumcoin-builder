@@ -42,6 +42,7 @@ export const MENUS: MenuDef[] = [
       { id: "view.explorer", label: "File Explorer" },
       { id: "view.compiler", label: "Compiler Panel" },
       { id: "view.abi", label: "ABI Panel" },
+      { id: "view.run", label: "Deploy/Execute Panel" },
       { id: "view.terminal", label: "Terminal" },
     ],
   },
