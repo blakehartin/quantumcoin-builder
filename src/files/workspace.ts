@@ -10,6 +10,7 @@
 // tracked explicitly so empty folders persist. The compiler consumes allSources().
 
 import { STORAGE_SOL, EXAMPLE_TOKEN_SOL, EXAMPLE_DETAILED_SOL } from "../app/sample";
+import { MAX_PATH_DEPTH, MAX_PATH_LEN } from "../app/limits";
 
 const LS_INDEX = "qcpbm.workspaces.v1";
 const LS_RECENTS = "qcpbm.recents.v1";
@@ -17,6 +18,8 @@ const LS_WS_PREFIX = "qcpbm.ws.";
 const RECENTS_CAP = 12;
 
 export type WorkspaceListener = () => void;
+/** Optional sink for non-fatal persistence warnings (e.g. localStorage quota). */
+export type WorkspaceWarn = (message: string) => void;
 export type WorkspaceTemplate = "blank" | "samples";
 
 export interface WorkspaceMeta {
@@ -58,6 +61,17 @@ export class Workspace {
   private data!: WorkspaceData; // active workspace's contents
   private recents: Recents = { files: [], workspaces: [] };
   private listeners = new Set<WorkspaceListener>();
+  private warn: WorkspaceWarn | null = null;
+  private quotaWarned = false;
+  // True while a persist attempt has failed (e.g. quota) and in-memory state has
+  // therefore diverged from storage; drives the beforeunload guard (QCB-D02).
+  private unsaved = false;
+  // Warnings raised before a sink is registered (e.g. corruption detected in the
+  // constructor, which runs before main.ts calls onWarn) are buffered and flushed.
+  private pendingWarnings: string[] = [];
+  // Workspace ids whose corrupt on-disk bytes could not be backed up: persisting
+  // to these keys is suppressed so the original (recoverable) data is preserved.
+  private protectedIds = new Set<string>();
 
   constructor() {
     this.loadRecents();
@@ -104,21 +118,86 @@ export class Workspace {
   }
 
   private readWorkspaceData(id: string): WorkspaceData | null {
+    let raw: string | null;
     try {
-      const raw = localStorage.getItem(LS_WS_PREFIX + id);
-      if (!raw) return null;
+      raw = localStorage.getItem(LS_WS_PREFIX + id);
+    } catch {
+      return null;
+    }
+    if (!raw) return null; // missing: safe for the caller to seed
+    try {
       const d = JSON.parse(raw) as Partial<WorkspaceData>;
+      if (!d || typeof d !== "object" || Array.isArray(d)) throw new Error("not an object");
       return { files: d.files ?? {}, folders: d.folders ?? [], active: d.active ?? "" };
     } catch {
+      // Corrupt: present but unparseable (e.g. a power-loss-truncated write).
+      // Preserve the original bytes before any caller seeds + overwrites this key.
+      this.handleCorrupt(id, raw);
       return null;
     }
   }
 
+  /**
+   * Back up a corrupt workspace value so a subsequent seed+overwrite cannot
+   * destroy recoverable data. If the backup itself fails (e.g. quota), mark the
+   * id protected so `writeWorkspaceData` never overwrites the original bytes.
+   */
+  private handleCorrupt(id: string, raw: string): void {
+    const backupKey = `${LS_WS_PREFIX}${id}.corrupt.${Date.now()}`;
+    let backedUp = false;
+    try {
+      localStorage.setItem(backupKey, raw);
+      backedUp = true;
+    } catch {
+      backedUp = false;
+    }
+    if (backedUp) {
+      this.emitWarn(
+        "A workspace could not be read (its saved data was corrupted). A backup was kept in browser storage; download your project (.zip) to preserve it.",
+      );
+    } else {
+      this.protectedIds.add(id);
+      this.emitWarn(
+        "A workspace could not be read (its saved data was corrupted) and no backup could be saved. Changes to it will not be persisted to avoid overwriting the corrupted data; download your project (.zip).",
+      );
+    }
+  }
+
+  /** Register a sink for non-fatal persistence warnings (localStorage quota). */
+  onWarn(fn: WorkspaceWarn): void {
+    this.warn = fn;
+    const pending = this.pendingWarnings;
+    this.pendingWarnings = [];
+    for (const m of pending) fn(m);
+  }
+
+  /** Emit a warning now, or buffer it until a sink is registered. */
+  private emitWarn(message: string): void {
+    if (this.warn) this.warn(message);
+    else this.pendingWarnings.push(message);
+  }
+
+  private reportQuota(): void {
+    if (this.quotaWarned) return;
+    this.quotaWarned = true;
+    this.emitWarn(
+      "Storage limit reached: recent changes may not be saved. Download your project (.zip) and remove large or unused files.",
+    );
+  }
+
   private writeWorkspaceData(id: string, data: WorkspaceData): void {
+    // Never overwrite corrupt bytes we could not back up (QCB-D01). Edits to a
+    // protected workspace cannot be persisted, so flag them as unsaved too.
+    if (this.protectedIds.has(id)) {
+      this.unsaved = true;
+      return;
+    }
     try {
       localStorage.setItem(LS_WS_PREFIX + id, JSON.stringify(data));
+      this.unsaved = false;
     } catch {
-      /* ignore quota errors */
+      this.unsaved = true;
+      this.reportQuota();
     }
   }
 
@@ -126,8 +205,14 @@ export class Workspace {
     try {
       localStorage.setItem(LS_INDEX, JSON.stringify(this.index));
     } catch {
-      /* ignore */
+      this.unsaved = true;
+      this.reportQuota();
     }
+  }
+
+  /** True when a persist attempt has failed and unsaved edits remain in memory. */
+  hasUnsavedChanges(): boolean {
+    return this.unsaved;
   }
 
   private persistActive(): void {
@@ -449,7 +534,7 @@ export class Workspace {
 
   private newMeta(name: string): WorkspaceMeta {
     const now = Date.now();
-    const id = `ws_${now.toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+    const id = `ws_${now.toString(36)}_${randomToken()}`;
     return { id, name, createdAt: now, lastOpenedAt: now };
   }
 
@@ -475,27 +560,57 @@ export class Workspace {
 
 // ---- Path helpers ----
 
-function normalizePath(raw: string, defaultSol: boolean): string {
-  let p = raw
+// Reduce an arbitrary, possibly-hostile path to a safe workspace key: forward
+// slashes only, no control/reserved characters, no "." / ".." segments (so an
+// imported name can never traverse outside the workspace or confuse the
+// compiler's source-unit resolution), and bounded length/depth.
+const RESERVED_SEGMENTS = new Set(["__proto__", "constructor", "prototype"]);
+
+// Collision-resistant workspace-id suffix from the platform CSPRNG (QCB-008),
+// with a non-crypto fallback for environments lacking Web Crypto.
+function randomToken(): string {
+  const c = (globalThis as { crypto?: Crypto }).crypto;
+  if (c?.randomUUID) return c.randomUUID().replace(/-/g, "").slice(0, 12);
+  if (c?.getRandomValues) {
+    const b = c.getRandomValues(new Uint8Array(6));
+    return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+  }
+  return Math.random().toString(36).slice(2, 14);
+}
+
+function sanitizeSegments(raw: string): string[] {
+  const cleaned = raw
     .trim()
     .replace(/\\/g, "/")
-    .replace(/^\.\//, "")
-    .replace(/^\/+/, "")
-    .replace(/\/+/g, "/")
-    .replace(/\/+$/, "");
+    // Drop control chars and Windows-reserved characters within names.
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .replace(/[<>:"|?*]/g, "")
+    .replace(/\/+/g, "/");
+  const out: string[] = [];
+  for (const seg of cleaned.split("/")) {
+    const s = seg.trim();
+    if (!s || s === "." || s === "..") continue; // strip empties and traversal
+    // Reject reserved keys so a crafted path can never pollute the prototype of
+    // the object-keyed `files`/`folders` maps (QCB-005).
+    if (RESERVED_SEGMENTS.has(s.toLowerCase())) continue;
+    out.push(s);
+  }
+  return out.slice(0, MAX_PATH_DEPTH);
+}
+
+function normalizePath(raw: string, defaultSol: boolean): string {
+  const segs = sanitizeSegments(raw);
+  let p = segs.join("/");
   if (!p) p = "Untitled";
+  if (p.length > MAX_PATH_LEN) p = p.slice(0, MAX_PATH_LEN);
   if (defaultSol && !/\.[A-Za-z0-9]+$/.test(basename(p))) p += ".sol";
   return p;
 }
 
 function normalizeFolder(raw: string): string {
-  return raw
-    .trim()
-    .replace(/\\/g, "/")
-    .replace(/^\.\//, "")
-    .replace(/^\/+/, "")
-    .replace(/\/+/g, "/")
-    .replace(/\/+$/, "");
+  let p = sanitizeSegments(raw).join("/");
+  if (p.length > MAX_PATH_LEN) p = p.slice(0, MAX_PATH_LEN);
+  return p;
 }
 
 function basename(p: string): string {

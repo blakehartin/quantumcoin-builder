@@ -291,9 +291,9 @@ export class SidePanel {
     for (const fn of catalog.read) {
       const div = document.createElement("div");
       div.className = "fn";
-      const ret = fn.outputs.length ? " \u2192 " + fn.outputs.map((o) => o.type).join(", ") : "";
-      div.innerHTML = `<div class="sig">${escape(fn.name)}(${fn.inputs.map((i) => `${i.type} ${i.name}`).join(", ")})${ret}</div>` +
-        `<div class="meta">selector: ${fn.selector || "n/a"}</div>`;
+      const ret = fn.outputs.length ? " \u2192 " + fn.outputs.map((o) => escape(o.type)).join(", ") : "";
+      div.innerHTML = `<div class="sig">${escape(fn.name)}(${sigParams(fn.inputs)})${ret}</div>` +
+        `<div class="meta">selector: ${escape(fn.selector || "n/a")}</div>`;
       f.appendChild(div);
     }
 
@@ -308,7 +308,7 @@ export class SidePanel {
     for (const ev of catalog.events) {
       const div = document.createElement("div");
       div.className = "fn";
-      div.innerHTML = `<div class="sig">${escape(ev.signature)}</div><div class="meta">topic0: ${ev.topic0 || "n/a"}</div>`;
+      div.innerHTML = `<div class="sig">${escape(ev.signature)}</div><div class="meta">topic0: ${escape(ev.topic0 || "n/a")}</div>`;
       f.appendChild(div);
     }
 
@@ -325,7 +325,7 @@ export class SidePanel {
   private writeFn(catalog: AbiCatalog, fn: AbiCatalog["write"][number]): HTMLElement {
     const div = document.createElement("div");
     div.className = "fn";
-    div.innerHTML = `<div class="sig">${escape(fn.name)}(${fn.inputs.map((i) => `${i.type} ${i.name}`).join(", ")})</div>`;
+    div.innerHTML = `<div class="sig">${escape(fn.name)}(${sigParams(fn.inputs)})</div>`;
 
     const calldata = document.createElement("div");
     calldata.className = "meta";
@@ -408,6 +408,9 @@ function emptyLine(text: string): HTMLElement {
 }
 function escape(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function sigParams(inputs: { type: string; name: string }[]): string {
+  return inputs.map((i) => `${escape(i.type)} ${escape(i.name)}`).join(", ");
 }
 function hexBytes(hex: string): number {
   const h = hex.startsWith("0x") ? hex.slice(2) : hex;

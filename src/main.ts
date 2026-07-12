@@ -16,11 +16,24 @@ import { Tabs } from "./files/tabs";
 import { initSdk } from "./abi/sdk";
 import { readZip } from "./export/zip";
 import { downloadProjectZip } from "./export/download";
+import { MAX_FILE_BYTES, MAX_SOURCE_CHARS, MAX_ZIP_TOTAL_BYTES } from "./app/limits";
 
 const store = new Store();
 const workspace = new Workspace();
 const compiler = new CompilerClient();
 const terminal = new Terminal();
+
+// Surface non-fatal persistence warnings (e.g. localStorage quota) in the terminal.
+workspace.onWarn((message) => terminal.log(message, "warning"));
+
+// Guard against closing/reloading the tab while edits could not be persisted
+// (e.g. storage quota exceeded), so unsaved changes are not silently lost (QCB-D02).
+window.addEventListener("beforeunload", (e) => {
+  if (workspace.hasUnsavedChanges()) {
+    e.preventDefault();
+    e.returnValue = "";
+  }
+});
 
 let openFiles: string[] = [workspace.getActive()];
 let explorerVisible = true;
@@ -70,6 +83,7 @@ const editor = new QCEditor({
     store.set({ pragmaOk: status.ok });
     sidePanel.setPragmaOk(status.ok);
   },
+  onPasteWarning: (message) => terminal.log(message, "warning"),
 });
 
 // ---- Side panel ----
@@ -387,10 +401,25 @@ function onWorkspaceSwitched(): void {
 
 function importFromFile(): void {
   pickFile(".sol", async (file) => {
+    if (!file.name.toLowerCase().endsWith(".sol")) {
+      terminal.log(`Import rejected: ${file.name} is not a .sol file`, "error");
+      return;
+    }
+    if (file.size > MAX_FILE_BYTES) {
+      terminal.log(
+        `Import rejected: ${file.name} is ${fmtBytes(file.size)} (limit ${fmtBytes(MAX_FILE_BYTES)})`,
+        "error",
+      );
+      return;
+    }
     const text = await file.text();
+    if (text.length > MAX_SOURCE_CHARS) {
+      terminal.log(`Import rejected: ${file.name} exceeds ${MAX_SOURCE_CHARS} characters`, "error");
+      return;
+    }
     const name = workspace.importFile(file.name, text);
     openFiles.push(name);
-    editor.setDocument(name, text);
+    editor.setDocument(name, workspace.read(name));
     renderTabs();
     terminal.log(`Imported ${name}`, "success");
   });
@@ -398,19 +427,36 @@ function importFromFile(): void {
 
 function importFromZip(): void {
   pickFile(".zip", async (file) => {
+    if (file.size > MAX_ZIP_TOTAL_BYTES) {
+      terminal.log(
+        `Zip rejected: ${file.name} is ${fmtBytes(file.size)} (limit ${fmtBytes(MAX_ZIP_TOTAL_BYTES)})`,
+        "error",
+      );
+      return;
+    }
     try {
       const entries = await readZip(file);
       let last = "";
+      let imported = 0;
+      let skipped = 0;
       for (const e of entries) {
-        if (e.name.endsWith(".sol")) last = workspace.importFile(e.name, e.text);
+        if (!e.name.toLowerCase().endsWith(".sol")) continue;
+        if (e.text.length > MAX_SOURCE_CHARS) {
+          skipped++;
+          terminal.log(`Skipped ${e.name}: exceeds ${MAX_SOURCE_CHARS} characters`, "warning");
+          continue;
+        }
+        last = workspace.importFile(e.name, e.text);
+        imported++;
       }
-      if (last) {
+      if (imported > 0) {
         openFiles.push(last);
         editor.setDocument(last, workspace.read(last));
         renderTabs();
-        terminal.log(`Imported ${entries.filter((e) => e.name.endsWith(".sol")).length} file(s) from ${file.name}`, "success");
+        const suffix = skipped ? ` (${skipped} skipped)` : "";
+        terminal.log(`Imported ${imported} file(s) from ${file.name}${suffix}`, "success");
       } else {
-        terminal.log(`No .sol files found in ${file.name}`, "warning");
+        terminal.log(`No importable .sol files found in ${file.name}`, "warning");
       }
     } catch (err) {
       terminal.log("Zip import failed: " + (err instanceof Error ? err.message : String(err)), "error");
@@ -424,6 +470,12 @@ function downloadProject(): void {
   const count = Object.keys(sources).length;
   const filename = downloadProjectZip(sources);
   terminal.log(`Downloaded ${count} file(s) as ${filename}`, "success");
+}
+
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function pickFile(accept: string, onPick: (f: File) => void): void {

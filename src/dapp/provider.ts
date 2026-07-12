@@ -124,9 +124,10 @@ export class WalletProvider {
       this.emit("statusChanged");
     });
     p.on("chainChanged", (chainIdHex: string) => {
-      // Refresh the descriptor lazily; the hex id is enough to trigger a redraw.
-      void this.refreshNetwork();
       this.emit("chainChanged", chainIdHex);
+      // Refresh the network descriptor, then signal a redraw so the wallet bar's
+      // network pill reflects the new chain (statusChanged drives the UI).
+      void this.refreshNetwork().then(() => this.emit("statusChanged"));
     });
     p.on("disconnect", () => {
       this.account = null;

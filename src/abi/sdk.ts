@@ -76,10 +76,28 @@ export async function initSdk(): Promise<void> {
   // `seed-words@1.0.x` (a transitive dep used by the SDK's Initialize()) relies on
   // sloppy-mode implicit globals — `for (i in ...)` / `i = 0` / `j = 0` with no
   // declaration — which throw `ReferenceError` under ESM strict mode. Pre-declaring
-  // the bindings on the global object lets those assignments resolve so the SDK's
-  // WASM runtime can finish initializing (enabling SDK calldata encoding).
-  if (!("i" in globalThis)) (globalThis as any).i = 0;
-  if (!("j" in globalThis)) (globalThis as any).j = 0;
+  // the bindings lets those assignments resolve so the SDK's WASM runtime can finish
+  // initializing (enabling SDK calldata encoding). We only add bindings that don't
+  // already exist and remove exactly those we added once init settles, keeping the
+  // global-namespace pollution window as small as possible (QCB-002). This is a
+  // scoped workaround for an upstream dependency bug; remove when `seed-words` ships
+  // a strict-mode-clean release.
+  const addedGlobals: string[] = [];
+  for (const key of ["i", "j"]) {
+    if (!(key in globalThis)) {
+      (globalThis as any)[key] = 0;
+      addedGlobals.push(key);
+    }
+  }
+  const cleanupGlobals = (): void => {
+    for (const key of addedGlobals) {
+      try {
+        delete (globalThis as any)[key];
+      } catch {
+        /* non-configurable binding: best-effort cleanup only */
+      }
+    }
+  };
 
   try {
     const modNs: AnyModule = await import("quantumcoin");
@@ -94,6 +112,7 @@ export async function initSdk(): Promise<void> {
   } catch (err) {
     ready = false;
     lastError = err instanceof Error ? err.message : String(err);
+    cleanupGlobals();
     notifySettled();
     throw err;
   }
@@ -112,6 +131,7 @@ export async function initSdk(): Promise<void> {
   } catch {
     runtimeReady = false;
   } finally {
+    cleanupGlobals();
     notifySettled();
   }
 }

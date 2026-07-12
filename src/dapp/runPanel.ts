@@ -24,6 +24,12 @@ import { createArgControl, createModeToggle, getArgMode } from "../abi/argContro
 import { isSdkReady, isAddress, decodeFunctionResult, onSdkSettled } from "../abi/sdk";
 import { copyToClipboard } from "../export/download";
 import {
+  MAX_OUTPUT_CHARS,
+  escapeAttr,
+  isTxHashLike,
+  truncateWithNotice,
+} from "../app/limits";
+import {
   WalletProvider,
   type TransactionResult,
 } from "./provider";
@@ -386,11 +392,18 @@ export class RunPanel {
       // Resolve the deployed address independently of the status event.
       void this.provider.waitForReceipt(txHash).then((receipt) => {
         const addr = receipt?.contractAddress;
-        if (addr) {
+        // Validate the wallet-supplied address shape before it flows into logs,
+        // the "Load" input, and downstream getCode/eth_call requests (QCB-004).
+        if (typeof addr === "string" && isAddress(addr)) {
           this.hooks.log(`${c.contractName} deployed at ${addr}`, "success");
           // Populate the "Load" input with the new address and run the load flow.
           if (this.atInput) this.atInput.value = addr;
           this.loadContract(c.contractName, addr, c.abi, catalog);
+        } else if (addr != null) {
+          this.hooks.log(
+            `Ignored malformed contract address in deploy receipt for ${c.contractName}`,
+            "warning",
+          );
         }
       });
 
@@ -505,7 +518,9 @@ export class RunPanel {
       const data = encodeCallValues(inst.catalog, fn.name, args.values!);
       const ret = await this.provider.ethCall(inst.address, data);
       const decoded = decodeFunctionResult(inst.catalog.iface, fn.name, ret);
-      const text = formatResult(decoded);
+      // On-chain return data is untrusted: cap length before display/logging so
+      // a hostile contract cannot bloat the DOM. Rendered via textContent (no HTML).
+      const text = truncateWithNotice(formatResult(decoded), MAX_OUTPUT_CHARS);
       chip.set("\u2713", "ok");
       out.textContent = text;
       out.style.display = "";
@@ -565,6 +580,9 @@ export class RunPanel {
   }
 
   private onTxResult(r: TransactionResult): void {
+    // Only act on well-formed hashes that correlate to a tx we actually
+    // submitted; drop unsolicited/malformed extension events (QCB-004/QCB-017).
+    if (!r || typeof r.txHash !== "string" || !isTxHashLike(r.txHash)) return;
     const cb = this.pending.get(r.txHash);
     if (cb) {
       cb(r);
@@ -622,29 +640,46 @@ export class RunPanel {
   private explorerBase(): string | null {
     const net = this.provider.getNetwork();
     if (!net?.blockExplorerDomain) return null;
-    const d = net.blockExplorerDomain;
-    return /^https?:\/\//.test(d) ? d : "https://" + d;
+    const d = net.blockExplorerDomain.trim();
+    // The domain comes from the wallet/network (semi-trusted): only accept a
+    // clean http(s) origin and reject anything with quotes/spaces/control chars
+    // that could break out of an href attribute.
+    if (/["'\s<>\\]/.test(d)) return null;
+    const withScheme = /^https?:\/\//.test(d) ? d : "https://" + d;
+    try {
+      const u = new URL(withScheme);
+      if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+      return withScheme.replace(/\/+$/, "");
+    } catch {
+      return null;
+    }
   }
 
   private explorerLink(kind: "tx" | "address", id: string): HTMLAnchorElement | null {
     const base = this.explorerBase();
-    if (!base) return null;
+    if (!base || !isTxHashLike(id)) return null;
+    const dest = `${base}/${kind}/${encodeURIComponent(id)}`;
     const a = document.createElement("a");
     a.className = "explorer-link";
-    a.href = `${base}/${kind}/${id}`;
+    a.href = dest;
     a.target = "_blank";
-    a.rel = "noopener";
+    a.rel = "noopener noreferrer";
     a.textContent = "\u2197";
-    a.title = "View on block explorer";
+    // Show the full destination so the user can see where the (wallet-supplied)
+    // explorer host actually points before following the link (QCB-003).
+    a.title = `Open ${dest}`;
     return a;
   }
 
   /** Inline txHash link (falls back to a short mono span when no explorer). */
   private txLink(txHash: string): string {
+    const short = escapeHtml(shortAddr(txHash));
     const base = this.explorerBase();
-    const short = shortAddr(txHash);
-    if (!base) return `<span class="mono">${short}</span>`;
-    return `<a class="explorer-link" href="${base}/tx/${txHash}" target="_blank" rel="noopener">${short} \u2197</a>`;
+    // Only build an anchor for a well-formed hash; otherwise render inert text.
+    if (!base || !isTxHashLike(txHash)) return `<span class="mono">${short}</span>`;
+    const dest = `${base}/tx/${encodeURIComponent(txHash)}`;
+    const href = escapeAttr(dest);
+    return `<a class="explorer-link" href="${href}" title="${escapeAttr("Open " + dest)}" target="_blank" rel="noopener noreferrer">${short} \u2197</a>`;
   }
 }
 
